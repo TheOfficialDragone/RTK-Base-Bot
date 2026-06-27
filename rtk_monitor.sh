@@ -49,7 +49,7 @@ telegram() {
     curl -s -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
         -d "chat_id=${CHAT_ID}" \
         -d "parse_mode=HTML" \
-        -d "text=$1" > /dev/null 2>&1
+        --data-urlencode "text=$1" > /dev/null 2>&1
 }
 
 ora() { date "+%d/%m/%Y %H:%M:%S"; }
@@ -151,7 +151,7 @@ ntrip_test() {
 
     local request="GET /${mount} HTTP/1.0\r\nUser-Agent: NTRIP MonitorRTK/1.0\r\n${auth}Accept: */*\r\nConnection: close\r\n\r\n"
 
-    ( printf "$request"; sleep 3 ) | timeout 5 nc -w 5 "$host" "$port" > "$tmpfile" 2>/dev/null
+    ( printf '%s' "$request"; sleep 3 ) | timeout 5 nc -w 5 "$host" "$port" > "$tmpfile" 2>/dev/null
 
     if [ ! -s "$tmpfile" ]; then
         rm -f "$tmpfile"
@@ -230,8 +230,12 @@ monitoraggio() {
     local str2str=$(check_str2str)
     local gpsd=$(check_gpsd)
 
-    [ $internet -eq 0 ] && [ $prev_internet -eq 1 ] && telegram "<b>❌ ALLARME - Perdita Internet</b>%0A$(ora)" && disc_internet=$((disc_internet+1))
-    [ $internet -eq 1 ] && [ $prev_internet -eq 0 ] && telegram "<b>✅ OK - Internet ripristinata</b>%0A$(ora)"
+    if [ $internet -eq 0 ] && [ $prev_internet -eq 1 ]; then
+        telegram "<b>❌ ALLARME - Perdita Internet</b>%0A$(ora)"
+        disc_internet=$((disc_internet+1))
+    elif [ $internet -eq 1 ] && [ $prev_internet -eq 0 ]; then
+        telegram "<b>✅ OK - Internet ripristinata</b>%0A$(ora)"
+    fi
 
     if [ $dell -eq 0 ] && [ $prev_dell -eq 1 ]; then
         telegram "<b>❌ ALLARME - Disconnesso dal Dell SNIP</b>%0A${DELL_IP}:2101%0A$(ora)"
@@ -241,14 +245,26 @@ monitoraggio() {
         dell_connected_since=$(date +%s)
     fi
 
-    [ $centipede -eq 0 ] && [ $prev_centipede -eq 1 ] && telegram "<b>❌ ALLARME - Disconnesso da Centipede</b>%0A$(ora)" && disc_centipede=$((disc_centipede+1))
-    [ $centipede -eq 1 ] && [ $prev_centipede -eq 0 ] && telegram "<b>✅ OK - Riconnesso a Centipede</b>%0A$(ora)"
+    if [ $centipede -eq 0 ] && [ $prev_centipede -eq 1 ]; then
+        telegram "<b>❌ ALLARME - Disconnesso da Centipede</b>%0A$(ora)"
+        disc_centipede=$((disc_centipede+1))
+    elif [ $centipede -eq 1 ] && [ $prev_centipede -eq 0 ]; then
+        telegram "<b>✅ OK - Riconnesso a Centipede</b>%0A$(ora)"
+    fi
 
-    [ $str2str -eq 0 ] && [ $prev_str2str -eq 1 ] && telegram "<b>❌ ALLARME - str2str fermato</b>%0A$(ora)" && disc_str2str=$((disc_str2str+1))
-    [ $str2str -eq 1 ] && [ $prev_str2str -eq 0 ] && telegram "<b>✅ OK - str2str riavviato</b>%0A$(ora)"
+    if [ $str2str -eq 0 ] && [ $prev_str2str -eq 1 ]; then
+        telegram "<b>❌ ALLARME - str2str fermato</b>%0A$(ora)"
+        disc_str2str=$((disc_str2str+1))
+    elif [ $str2str -eq 1 ] && [ $prev_str2str -eq 0 ]; then
+        telegram "<b>✅ OK - str2str riavviato</b>%0A$(ora)"
+    fi
 
-    [ $gpsd -eq 0 ] && [ $prev_gpsd -eq 1 ] && telegram "<b>❌ ALLARME - gpsd fermato</b>%0A$(ora)" && disc_gpsd=$((disc_gpsd+1))
-    [ $gpsd -eq 1 ] && [ $prev_gpsd -eq 0 ] && telegram "<b>✅ OK - gpsd riavviato</b>%0A$(ora)"
+    if [ $gpsd -eq 0 ] && [ $prev_gpsd -eq 1 ]; then
+        telegram "<b>❌ ALLARME - gpsd fermato</b>%0A$(ora)"
+        disc_gpsd=$((disc_gpsd+1))
+    elif [ $gpsd -eq 1 ] && [ $prev_gpsd -eq 0 ]; then
+        telegram "<b>✅ OK - gpsd riavviato</b>%0A$(ora)"
+    fi
 
     local temp_raw=$(get_temp_raw)
     [ "$temp_raw" -gt 75000 ] && telegram "<b>🌡 ALLARME - Temperatura alta!</b>%0ATemperatura: $((temp_raw/1000))°C%0A$(ora)"
@@ -279,20 +295,30 @@ monitoraggio() {
 
 # Avvio
 echo "[$(ora)] Monitor Base RTK v6 avviato"
-cat /proc/sys/kernel/random/boot_id 2>/dev/null > "$BOOT_FILE"
+[ ! -f "$BOOT_FILE" ] && cat /proc/sys/kernel/random/boot_id 2>/dev/null > "$BOOT_FILE"
 telegram "<b>🛰 Base RTK Online</b>%0AMonitor v6 avviato alle $(ora)%0A%0AComandi: /stato /uptime /log /satelliti /ntrip /help"
 
 # Loop principale
 while true; do
 
-    response=$(curl -s --max-time 3 \
-        "https://api.telegram.org/bot${TOKEN}/getUpdates?offset=$((LAST_UPDATE_ID+1))&timeout=2")
+    response=$(curl -s --max-time 8 \
+        "https://api.telegram.org/bot${TOKEN}/getUpdates?offset=$((LAST_UPDATE_ID+1))&timeout=5")
+
+    if ! echo "$response" | grep -q '"ok":true'; then
+        sleep 5
+        continue
+    fi
 
     update_id=$(echo "$response" | grep -o '"update_id":[0-9]*' | tail -1 | grep -o '[0-9]*')
     text=$(echo "$response" | grep -o '"text":"[^"]*"' | tail -1 | sed 's/"text":"//;s/"//')
+    sender_id=$(echo "$response" | grep -o '"chat":{"id":[0-9-]*' | tail -1 | grep -o '[0-9-]*$')
 
     if [ -n "$update_id" ] && [ "$update_id" -gt "$LAST_UPDATE_ID" ]; then
         LAST_UPDATE_ID=$update_id
+        if [ "$sender_id" != "$CHAT_ID" ]; then
+            echo "[$(ora)] Messaggio ignorato da chat_id non autorizzato: $sender_id"
+            continue
+        fi
         case "$text" in
             /stato*)
                 telegram "$(stato_completo)"
