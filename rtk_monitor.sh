@@ -12,7 +12,6 @@
 TOKEN="xxxxxxxxx"
 CHAT_ID="xxxxxx"
 DELL_IP="192.168.1.37"
-CENTIPEDE_IP="66.185.123.66"
 INTERVAL=60
 LAST_UPDATE_ID=0
 last_check=0
@@ -57,8 +56,12 @@ ora() { date "+%d/%m/%Y %H:%M:%S"; }
 
 check_internet()  { ping -c1 -W3 8.8.8.8 > /dev/null 2>&1 && echo 1 || echo 0; }
 check_dell()      { ss -tnp | grep -q "${DELL_IP}:2101" && echo 1 || echo 0; }
-check_centipede() { ss -tnp | grep -q "${CENTIPEDE_IP}:2101" && echo 1 || echo 0; }
-check_str2str()   { systemctl is-active --quiet str2str_ntrip_A && systemctl is-active --quiet str2str_ntrip_B && echo 1 || echo 0; }
+check_centipede() {
+    local ip
+    ip=$(getent ahostsv4 "${CENTIPEDE_HOST}" 2>/dev/null | awk 'NR==1{print $1}')
+    [ -n "$ip" ] && ss -tnp | grep -q "${ip}:${CENTIPEDE_PORT}" && echo 1 || echo 0
+}
+check_str2str()   { systemctl is-active --quiet str2str_tcp && systemctl is-active --quiet str2str_ntrip_A && systemctl is-active --quiet str2str_ntrip_B && echo 1 || echo 0; }
 check_gpsd()      { pgrep -x gpsd > /dev/null 2>&1 && echo 1 || echo 0; }
 emojione()        { [ "$1" -eq 1 ] && echo "✅" || echo "❌"; }
 
@@ -68,7 +71,7 @@ get_temperatura() {
     [ -n "$temp" ] && echo "$((temp/1000))°C" || echo "N/D"
 }
 get_temp_raw()   { cat /sys/class/thermal/thermal_zone0/temp 2>/dev/null || echo 0; }
-get_cpu()        { top -bn1 | grep "Cpu(s)" | awk '{print $2}' | cut -d'%' -f1; }
+get_cpu()        { vmstat 1 2 2>/dev/null | awk 'END{print 100-$15}'; }
 get_ram()        { free -m | awk '/^Mem:/ {printf "Usata: %dMB / %dMB (libera: %dMB) - %d%%", $3, $2, $4, ($3/$2)*100}'; }
 get_ram_pct()    { free -m | awk '/^Mem:/ {printf "%d", ($3/$2)*100}'; }
 get_swap()       { free -m | awk '/^Swap:/ {if ($2>0) printf "Usata: %dMB / %dMB - %d%%", $3, $2, ($3/$2)*100; else print "N/D"}'; }
@@ -88,12 +91,14 @@ get_dell_uptime() {
 }
 
 get_log() {
-    if [ -f /home/basegnss/rtkbase/run_cast.log ]; then
-        tail -5 /home/basegnss/rtkbase/run_cast.log 2>/dev/null
-    elif [ -f /home/basegnss/rtkbase/log/rtkbase_tcp.log ]; then
-        tail -5 /home/basegnss/rtkbase/log/rtkbase_tcp.log 2>/dev/null
+    local logdir="/home/basegnss/rtkbase/logs"
+    local log_file
+    log_file=$(ls -t "${logdir}"/str2str_tcp_*.log 2>/dev/null | head -1)
+    [ -z "$log_file" ] && log_file=$(ls -t "${logdir}"/str2str_ntrip_A*.log 2>/dev/null | head -1)
+    if [ -n "$log_file" ] && [ -f "$log_file" ]; then
+        tail -5 "$log_file" 2>/dev/null
     else
-        journalctl -u rtkbase --no-pager -n 5 2>/dev/null || echo "Log non disponibile"
+        journalctl -u str2str_tcp --no-pager -n 5 2>/dev/null || echo "Log non disponibile"
     fi
 }
 
