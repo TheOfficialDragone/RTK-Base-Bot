@@ -46,10 +46,12 @@ last_counter_reset=$(date +%s)
 dell_connected_since=$(date +%s)
 
 telegram() {
+    local text="${1//%0A/$'\n'}"
+    text="${text//%25/%}"
     curl -s -X POST "https://api.telegram.org/bot${TOKEN}/sendMessage" \
         -d "chat_id=${CHAT_ID}" \
         -d "parse_mode=HTML" \
-        --data-urlencode "text=$1" > /dev/null 2>&1
+        --data-urlencode "text=${text}" > /dev/null 2>&1
 }
 
 ora() { date "+%d/%m/%Y %H:%M:%S"; }
